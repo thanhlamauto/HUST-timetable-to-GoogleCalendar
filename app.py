@@ -1,5 +1,5 @@
-from flask import Flask, request, render_template, send_from_directory
 import os
+from flask import Flask, request, render_template, send_from_directory, after_this_request
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -98,15 +98,30 @@ def upload_file():
             })
 
     # Save the event data to CSV
-    event_df = pd.DataFrame(event_data)
     output_file = os.path.join(app.config['UPLOAD_FOLDER'], 'class_schedule_events.csv')
+    event_df = pd.DataFrame(event_data)
     event_df.to_csv(output_file, index=False)
-    
+
+    # Delete the uploaded file to keep the server static
+    os.remove(filename)
+
+    # Return the CSV file URL for downloading
     return render_template('index.html', file_url=f"/uploads/class_schedule_events.csv")
 
-# Route to serve uploaded files
+# Route to serve uploaded files and delete them after download
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+    # Delete the file after sending it to the user
+    @after_this_request
+    def delete_file(response):
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            print(f"Error deleting file: {e}")
+        return response
+    
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 if __name__ == "__main__":
