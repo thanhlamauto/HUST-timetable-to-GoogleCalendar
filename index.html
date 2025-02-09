@@ -87,7 +87,7 @@
       reader.onload = function(e) {
         debugMessage("File loaded successfully.");
         const data = e.target.result;
-        const workbook = XLSX.read(data, { type: 'array' });
+        const workbook = XLSX.read(data, { type: 'array' , raw: true});
   
         // Parse the first sheet (with header included)
         let allRows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
@@ -162,7 +162,7 @@
     // It splits the week string, computes the start of each week, then adjusts by the weekday.
     function calculateClassDates(weeksStr, dayOfWeek, firstMonday) {
       const dates = [];
-      const weeks = weeksStr.split(',');
+      const weeks = String(weeksStr).split(',');
 
       const weekdayNum = dayOfWeek - 2;
   
