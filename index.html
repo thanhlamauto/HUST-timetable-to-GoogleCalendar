@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="icon" type="image/png" href="hust.jpg">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Class Schedule Generator</title>
+  <title>Hust timetable to Google Calendar</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     h1 { text-align: center; }
@@ -21,14 +22,17 @@
   </style>
 </head>
 <body>
-  <h1>Class Schedule Generator</h1>
+  <h1>Hust timetable to Google Calendar</h1>
   
   <label for="first_monday">Enter the first Monday of the semester (dd/mm/yyyy):</label>
   <input type="text" id="first_monday" placeholder="dd/mm/yyyy">
   
   <br><br>
   
-  <label for="file_input">Upload Excel file:</label>
+  <label for="file_input">
+    Upload Excel file from 
+    <a href="https://hieupham2k1.web.app/time-table" target="_blank">Hieupham2k1 | Timetable</a>:
+  </label>
   <input type="file" id="file_input" accept=".xlsx, .xls">
   
   <br><br>
@@ -211,5 +215,9 @@
       return csv.join('\r\n');
     }
   </script>
+  <!-- Embed YouTube video at the end of the page -->
+  <div style="text-align: center; margin-top: 40px;">
+    <iframe width="560" height="315" src="https://www.youtube.com/embed/XltwQzzLIP8?si=qnVgiCFBjO69FlLt" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+  </div>
 </body>
 </html>
