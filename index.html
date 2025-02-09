@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Class Schedule Generator</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    h1 { text-align: center; }
+    input, button { padding: 10px; margin: 10px; }
+    #download_link { display: none; }
+    #message { color: green; font-weight: bold; display: none; }
+    #debug { 
+      background: #f9f9f9; 
+      border: 1px solid #ccc; 
+      padding: 10px; 
+      margin: 10px; 
+      font-size: 0.9em; 
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Class Schedule Generator</h1>
+  
+  <label for="first_monday">Enter the first Monday of the semester (dd/mm/yyyy):</label>
+  <input type="text" id="first_monday" placeholder="dd/mm/yyyy">
+  
+  <br><br>
+  
+  <label for="file_input">Upload Excel file:</label>
+  <input type="file" id="file_input" accept=".xlsx, .xls">
+  
+  <br><br>
+  
+  <button onclick="generateSchedule()">Generate Schedule</button>
+  
+  <br><br>
+  
+  <!-- Message for when CSV is ready -->
+  <div id="message">Your class schedule CSV is ready! Click the link below to download it.</div>
+  
+  <!-- Download link (hidden by default) -->
+  <a id="download_link" href="#" download="class_schedule_events.csv">Download CSV</a>
+  
+  <!-- Debug messages container -->
+  <div id="debug"></div>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.1/xlsx.full.min.js"></script>
+  
+  <script>
+    function debugMessage(msg) {
+      const debugDiv = document.getElementById("debug");
+      debugDiv.style.display = "block";
+      const p = document.createElement("p");
+      p.textContent = msg;
+      debugDiv.appendChild(p);
+      console.log(msg);
+    }
+  
+    function generateSchedule() {
+      const firstMondayStr = document.getElementById("first_monday").value;
+      const fileInput = document.getElementById("file_input");
+  
+      if (!firstMondayStr || !fileInput.files.length) {
+        alert("Please provide the first Monday date and upload a file.");
+        return;
+      }
+  
+      debugMessage("Starting schedule generation...");
+  
+      // Convert the dd/mm/yyyy string into a Date.
+      // Rearranging to yyyy/mm/dd works reliably in JavaScript.
+      const firstMonday = new Date(firstMondayStr.split('/').reverse().join('-'));
+      debugMessage("Parsed first Monday date: " + firstMonday.toDateString());
+  
+      // Read the Excel file
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+  
+      reader.onload = function(e) {
+        debugMessage("File loaded successfully.");
+        const data = e.target.result;
+        const workbook = XLSX.read(data, { type: 'array' });
+  
+        // Parse the first sheet (with header included)
+        let allRows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+        debugMessage("Excel sheet parsed. Total rows (including header): " + allRows.length);
+  
+        // Remove the header row (index 0)
+        let dataRows = allRows.slice(1);
+        debugMessage("Header row removed. Data rows count: " + dataRows.length);
+  
+        // Remove the first data row (equivalent to df.drop(index=0) in Python)
+        dataRows = dataRows.slice(1);
+        debugMessage("First data row removed. Remaining rows count: " + dataRows.length);
+  
+        const eventData = [];
+  
+        // Process the remaining rows
+        for (let i = 0; i < dataRows.length; i++) {
+          const row = dataRows[i];
+          if (row.length < 16) {
+            debugMessage("Skipping row " + (i+2) + " due to insufficient columns.");
+            continue;
+          }
+  
+          const subject = row[6];      // Column 6 in the sheet
+          const week = row[15];        // Column 15 in the sheet
+          const dayOfWeek = row[10];      // Column 10 in the sheet
+          // Instead of using separate columns for time, split the time range in column 11.
+          let timeRangeStr = row[11];  // Column 11 (assumed to contain "0800-0930")
+          if (typeof timeRangeStr === "string" && timeRangeStr.includes("-")) {
+            const times = timeRangeStr.split("-");
+            var startTime = formatTime(times[0].trim());
+            var endTime = formatTime(times[1].trim());
+          } else {
+            debugMessage("Invalid time range format in row " + (i+2) + ". Skipping row.");
+            continue;
+          }
+          const location = row[16];    // Column 16 in the sheet
+  
+          debugMessage(`Processing row ${i+2}: Subject=${subject}, Week=${week}, Day=${dayOfWeek}`);
+  
+          const classDates = calculateClassDates(week, dayOfWeek, firstMonday);
+  
+          classDates.forEach(classDate => {
+            const startDate = formatDate(classDate);
+            eventData.push({
+              Subject: subject,
+              StartDate: startDate,
+              EndDate: startDate,
+              "Start Time": startTime,
+              "End Time": endTime,
+              "All Day Event": false,
+              Location: location,
+              Private: false
+            });
+          });
+        }
+  
+        const csv = convertToCSV(eventData);
+        const downloadLink = document.getElementById("download_link");
+        const message = document.getElementById("message");
+  
+        downloadLink.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        downloadLink.style.display = "block";
+        message.style.display = "block";
+        debugMessage("CSV generated successfully. Download link is now visible.");
+      };
+  
+      reader.readAsArrayBuffer(file);
+    }
+  
+    // This function mimics the Python logic.
+    // It splits the week string, computes the start of each week, then adjusts by the weekday.
+    function calculateClassDates(weeksStr, dayOfWeek, firstMonday) {
+      const dates = [];
+      const weeks = weeksStr.split(',');
+
+      const weekdayNum = dayOfWeek - 2;
+  
+      weeks.forEach(week => {
+        if (week.includes('-')) {
+          let [startWeek, endWeek] = week.split('-').map(Number);
+          for (let weekNum = startWeek; weekNum <= endWeek; weekNum++) {
+            // Calculate the start date for this week as: firstMonday + (weekNum - 24) weeks.
+            let startOfWeek = new Date(firstMonday.getTime() + (weekNum - 24) * 7 * 24 * 60 * 60 * 1000);
+            // In Python, start_of_week.weekday() returns Monday=0.
+            // In JavaScript, getDay() returns Sunday=0, so we convert:
+            let startWeekday = (startOfWeek.getDay() + 6) % 7;
+            let daysDiff = (weekdayNum - startWeekday + 7) % 7;
+            let classDate = new Date(startOfWeek.getTime() + daysDiff * 24 * 60 * 60 * 1000);
+            dates.push(classDate);
+          }
+        } else {
+          let weekNum = Number(week);
+          let startOfWeek = new Date(firstMonday.getTime() + (weekNum - 24) * 7 * 24 * 60 * 60 * 1000);
+          let startWeekday = (startOfWeek.getDay() + 6) % 7;
+          let daysDiff = (weekdayNum - startWeekday + 7) % 7;
+          let classDate = new Date(startOfWeek.getTime() + daysDiff * 24 * 60 * 60 * 1000);
+          dates.push(classDate);
+        }
+      });
+  
+      debugMessage("Calculated " + dates.length + " class date(s) for weeks: " + weeksStr);
+      return dates;
+    }
+  
+    function formatTime(timeStr) {
+      const str = String(timeStr);
+      const hour = str.padStart(4, '0').slice(0, 2);
+      const minute = str.padStart(4, '0').slice(2, 4);
+      return `${hour}:${minute}`;
+    }
+  
+    function formatDate(date) {
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+  
+    function convertToCSV(data) {
+      if (data.length === 0) return "";
+      const headers = Object.keys(data[0]);
+      const csv = [
+        headers.join(','), // header row
+        ...data.map(row => headers.map(fieldName => JSON.stringify(row[fieldName], (key, value) => value === null ? '' : value)).join(','))
+      ];
+      return csv.join('\r\n');
+    }
+  </script>
+</body>
+</html>
