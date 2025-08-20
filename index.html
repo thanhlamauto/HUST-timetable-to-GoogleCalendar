@@ -18,6 +18,8 @@
       margin: 10px; 
       font-size: 0.9em; 
       display: none;
+      max-height: 280px;
+      overflow: auto;
     }
   </style>
 </head>
@@ -43,17 +45,12 @@
   
   <br><br>
   
-  <!-- Message for when CSV is ready -->
   <div id="message">Your class schedule CSV is ready! Click the link below to download it.</div>
-  
-  <!-- Download link (hidden by default) -->
   <a id="download_link" href="#" download="class_schedule_events.csv">Download CSV</a>
   
-  <!-- Debug messages container -->
   <div id="debug"></div>
   
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.1/xlsx.full.min.js"></script>
-  
   <script>
     function debugMessage(msg) {
       const debugDiv = document.getElementById("debug");
@@ -63,161 +60,256 @@
       debugDiv.appendChild(p);
       console.log(msg);
     }
-  
-    function generateSchedule() {
-      const firstMondayStr = document.getElementById("first_monday").value;
-      const fileInput = document.getElementById("file_input");
-  
-      if (!firstMondayStr || !fileInput.files.length) {
-        alert("Please provide the first Monday date and upload a file.");
-        return;
-      }
-  
-      debugMessage("Starting schedule generation...");
-  
-      // Convert the dd/mm/yyyy string into a Date.
-      // Rearranging to yyyy/mm/dd works reliably in JavaScript.
-      const firstMonday = new Date(firstMondayStr.split('/').reverse().join('-'));
-      debugMessage("Parsed first Monday date: " + firstMonday.toDateString());
-  
-      // Read the Excel file
-      const file = fileInput.files[0];
-      const reader = new FileReader();
-  
-      reader.onload = function(e) {
-        debugMessage("File loaded successfully.");
-        const data = e.target.result;
-        const workbook = XLSX.read(data, { type: 'array' , raw: true});
-  
-        // Parse the first sheet (with header included)
-        let allRows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
-        debugMessage("Excel sheet parsed. Total rows (including header): " + allRows.length);
-  
-        // Remove the header row (index 0)
-        let dataRows = allRows.slice(1);
-        debugMessage("Header row removed. Data rows count: " + dataRows.length);
-  
-        // Remove the first data row (equivalent to df.drop(index=0) in Python)
-        dataRows = dataRows.slice(1);
-        debugMessage("First data row removed. Remaining rows count: " + dataRows.length);
-  
-        const eventData = [];
-  
-        // Process the remaining rows
-        for (let i = 0; i < dataRows.length; i++) {
-          const row = dataRows[i];
-          if (row.length < 16) {
-            debugMessage("Skipping row " + (i+2) + " due to insufficient columns.");
-            continue;
-          }
-  
-          const subject = row[6];      // Column 6 in the sheet
-          const week = row[15];        // Column 15 in the sheet
-          const dayOfWeek = row[10];      // Column 10 in the sheet
-          // Instead of using separate columns for time, split the time range in column 11.
-          let timeRangeStr = row[11];  // Column 11 (assumed to contain "0800-0930")
-          if (typeof timeRangeStr === "string" && timeRangeStr.includes("-")) {
-            const times = timeRangeStr.split("-");
-            var startTime = formatTime(times[0].trim());
-            var endTime = formatTime(times[1].trim());
-          } else {
-            debugMessage("Invalid time range format in row " + (i+2) + ". Skipping row.");
-            continue;
-          }
-          const location = row[16];    // Column 16 in the sheet
-  
-          debugMessage(`Processing row ${i+2}: Subject=${subject}, Week=${week}, Day=${dayOfWeek}`);
-  
-          const classDates = calculateClassDates(week, dayOfWeek, firstMonday);
-  
-          classDates.forEach(classDate => {
-            const startDate = formatDate(classDate);
-            eventData.push({
-              Subject: subject,
-              StartDate: startDate,
-              EndDate: startDate,
-              "Start Time": startTime,
-              "End Time": endTime,
-              "All Day Event": false,
-              Location: location,
-              Private: false
-            });
-          });
-        }
-  
-        const csv = convertToCSV(eventData);
-        const downloadLink = document.getElementById("download_link");
-        const message = document.getElementById("message");
-  
-        downloadLink.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
-        downloadLink.style.display = "block";
-        message.style.display = "block";
-        debugMessage("CSV generated successfully. Download link is now visible.");
-      };
-  
-      reader.readAsArrayBuffer(file);
-    }
-  
-    // This function mimics the Python logic.
-    // It splits the week string, computes the start of each week, then adjusts by the weekday.
-    function calculateClassDates(weeksStr, dayOfWeek, firstMonday) {
-      const dates = [];
-      const weeks = String(weeksStr).split(',');
 
-      const weekdayNum = dayOfWeek - 2;
-  
-      weeks.forEach(week => {
-        if (week.includes('-')) {
-          let [startWeek, endWeek] = week.split('-').map(Number);
-          for (let weekNum = startWeek; weekNum <= endWeek; weekNum++) {
-            // Calculate the start date for this week as: firstMonday + (weekNum - 24) weeks.
-            let startOfWeek = new Date(firstMonday.getTime() + (weekNum - 24) * 7 * 24 * 60 * 60 * 1000);
-            // In Python, start_of_week.weekday() returns Monday=0.
-            // In JavaScript, getDay() returns Sunday=0, so we convert:
-            let startWeekday = (startOfWeek.getDay() + 6) % 7;
-            let daysDiff = (weekdayNum - startWeekday + 7) % 7;
-            let classDate = new Date(startOfWeek.getTime() + daysDiff * 24 * 60 * 60 * 1000);
-            dates.push(classDate);
+    // --- Helpers ---
+    function parseLocalDMY(dmy) {
+      const [d, m, y] = String(dmy).split('/').map(Number);
+      if (!d || !m || !y) return null;
+      return new Date(y, m - 1, d); // local time (no UTC surprises)
+    }
+
+    // Extract all integer week numbers from a cell like "24-30, 32, 35-36"
+    function extractWeekNumbers(weeksStr) {
+      const out = [];
+      String(weeksStr).split(',').forEach(part => {
+        const s = part.trim();
+        if (!s) return;
+        if (s.includes('-')) {
+          const [a, b] = s.split('-').map(n => parseInt(n.trim(), 10));
+          if (!isNaN(a) && !isNaN(b) && b >= a) {
+            for (let k = a; k <= b; k++) out.push(k);
           }
         } else {
-          let weekNum = Number(week);
-          let startOfWeek = new Date(firstMonday.getTime() + (weekNum - 24) * 7 * 24 * 60 * 60 * 1000);
-          let startWeekday = (startOfWeek.getDay() + 6) % 7;
-          let daysDiff = (weekdayNum - startWeekday + 7) % 7;
-          let classDate = new Date(startOfWeek.getTime() + daysDiff * 24 * 60 * 60 * 1000);
-          dates.push(classDate);
+          const v = parseInt(s, 10);
+          if (!isNaN(v)) out.push(v);
         }
       });
-  
-      debugMessage("Calculated " + dates.length + " class date(s) for weeks: " + weeksStr);
-      return dates;
+      return out;
     }
-  
-    function formatTime(timeStr) {
-      const str = String(timeStr);
-      const hour = str.padStart(4, '0').slice(0, 2);
-      const minute = str.padStart(4, '0').slice(2, 4);
-      return `${hour}:${minute}`;
+
+    // Map various encodings to Monday=0..Sunday=6
+    function toWeekdayNum(dayVal) {
+      const num = Number(dayVal);
+      if (!isNaN(num)) {
+        // Common encodings:
+        // Excel code 2..8 => Mon..Sun
+        if (num >= 2 && num <= 8) return num - 2; // 2->0 ... 8->6
+        // Or 1..7 => Mon..Sun
+        if (num >= 1 && num <= 7) return num - 1; // 1->0 ... 7->6
+      }
+      // Text encodings (English / Vietnamese)
+      const s = String(dayVal).toLowerCase().trim();
+      if (s.startsWith('mon') || s.includes('thứ 2') || s.includes('thu 2') || s === 'hai') return 0;
+      if (s.startsWith('tue') || s.includes('thứ 3') || s.includes('thu 3') || s === 'ba') return 1;
+      if (s.startsWith('wed') || s.includes('thứ 4') || s.includes('thu 4') || s === 'tư') return 2;
+      if (s.startsWith('thu') || s.includes('thứ 5') || s.includes('thu 5') || s === 'năm') return 3;
+      if (s.startsWith('fri') || s.includes('thứ 6') || s.includes('thu 6') || s === 'sáu') return 4;
+      if (s.startsWith('sat') || s.includes('thứ 7') || s.includes('thu 7') || s === 'bảy') return 5;
+      if (s.startsWith('sun') || s.includes('cn') || s.includes('chủ nhật')) return 6;
+
+      return undefined; // unknown
     }
-  
+
+    function formatTime(raw) {
+      const digits = String(raw).replace(/\D/g, ''); // keep only 0-9
+      if (!digits) return null;
+      const hhmm = digits.padStart(4, '0').slice(-4); // e.g., "800" -> "0800"
+      const hh = hhmm.slice(0, 2);
+      const mm = hhmm.slice(2, 4);
+      return `${hh}:${mm}`;
+    }
+
     function formatDate(date) {
       const day = String(date.getDate()).padStart(2, '0');
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const year = date.getFullYear();
       return `${day}/${month}/${year}`;
     }
-  
+
     function convertToCSV(data) {
       if (data.length === 0) return "";
       const headers = Object.keys(data[0]);
-      const csv = [
-        headers.join(','), // header row
-        ...data.map(row => headers.map(fieldName => JSON.stringify(row[fieldName], (key, value) => value === null ? '' : value)).join(','))
-      ];
-      return csv.join('\r\n');
+      const rows = data.map(row =>
+        headers.map(fieldName =>
+          JSON.stringify(row[fieldName], (k, v) => (v === null || v === undefined) ? '' : v)
+        ).join(',')
+      );
+      // add BOM so Excel/Google handles UTF-8 consistently
+      return '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    }
+
+    // --- Core ---
+    function generateSchedule() {
+      const firstMondayStr = document.getElementById("first_monday").value;
+      const fileInput = document.getElementById("file_input");
+
+      if (!firstMondayStr || !fileInput.files.length) {
+        alert("Please provide the first Monday date and upload a file.");
+        return;
+      }
+
+      const firstMonday = parseLocalDMY(firstMondayStr);
+      if (!firstMonday || isNaN(firstMonday.getTime())) {
+        alert("Invalid date. Please use format dd/mm/yyyy.");
+        return;
+      }
+
+      debugMessage("Starting schedule generation...");
+      debugMessage("Parsed first Monday date (local): " + firstMonday.toDateString());
+
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+
+      reader.onload = function(e) {
+        debugMessage("File loaded successfully.");
+        const data = e.target.result;
+        const workbook = XLSX.read(data, { type: 'array', raw: true });
+
+        let allRows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+        debugMessage("Excel sheet parsed. Total rows (including header): " + allRows.length);
+
+        // Remove the header row
+        let dataRows = allRows.slice(1);
+        debugMessage("Header row removed. Data rows count: " + dataRows.length);
+
+        // Remove the first data row (if your old pipeline expected that)
+        dataRows = dataRows.slice(1);
+        debugMessage("First data row removed. Remaining rows count: " + dataRows.length);
+
+        // --- Detect baseWeek automatically from column 15 (index 15) ---
+        let baseWeek = Infinity;
+        for (const row of dataRows) {
+          if (!row || row.length < 16) continue;
+          const weekCell = row[15];
+          const weeks = extractWeekNumbers(weekCell);
+          for (const w of weeks) if (Number.isInteger(w)) baseWeek = Math.min(baseWeek, w);
+        }
+        if (!isFinite(baseWeek)) {
+          alert("Could not detect the base week from the Excel file. Please check column 15 (weeks).");
+          return;
+        }
+        debugMessage("Detected base week = " + baseWeek + " (auto-anchored to first Monday).");
+
+        const eventData = [];
+
+        for (let i = 0; i < dataRows.length; i++) {
+          const row = dataRows[i];
+          if (!row || row.length < 17) {
+            debugMessage("Skipping row " + (i + 2) + " due to insufficient columns.");
+            continue;
+          }
+
+          const subject = row[6];        // Column 7 in human terms (index 6)
+          const week = row[15];          // Column 16 (index 15)
+          const dayOfWeek = row[10];     // Column 11 (index 10)
+          let timeRangeStr = row[11];    // Column 12 (index 11), e.g. "0800-0930" or "08:00-09:30"
+          const location = row[16];      // Column 17 (index 16)
+
+          if (timeRangeStr == null) {
+            debugMessage("Missing time range in row " + (i + 2) + ". Skipping row.");
+            continue;
+          }
+
+          // Normalize time range
+          let startTime = null, endTime = null;
+          if (typeof timeRangeStr === "string" && timeRangeStr.includes("-")) {
+            const parts = timeRangeStr.split("-");
+            startTime = formatTime(parts[0]);
+            endTime = formatTime(parts[1]);
+          } else {
+            // Sometimes Excel might store times as numbers or without '-'
+            const str = String(timeRangeStr);
+            if (str.includes("-")) {
+              const parts = str.split("-");
+              startTime = formatTime(parts[0]);
+              endTime = formatTime(parts[1]);
+            }
+          }
+          if (!startTime || !endTime) {
+            debugMessage("Invalid time range format in row " + (i + 2) + ". Skipping row.");
+            continue;
+          }
+
+          const weekdayNum = toWeekdayNum(dayOfWeek);
+          if (weekdayNum === undefined) {
+            debugMessage("Unrecognized dayOfWeek code in row " + (i + 2) + ": " + dayOfWeek);
+            continue;
+          }
+
+          debugMessage(`Processing row ${i + 2}: Subject=${subject}, Weeks=${week}, DayCode=${dayOfWeek}→${weekdayNum}`);
+
+          const classDates = calculateClassDates(week, weekdayNum, firstMonday, baseWeek);
+          classDates.forEach(classDate => {
+            const startDate = formatDate(classDate);
+            eventData.push({
+              Subject: subject || "",
+              StartDate: startDate,
+              EndDate: startDate,
+              "Start Time": startTime,
+              "End Time": endTime,
+              "All Day Event": false,
+              Location: location || "",
+              Private: false
+            });
+          });
+        }
+
+        if (eventData.length === 0) {
+          alert("No events generated. Please re-check the file format and inputs.");
+          return;
+        }
+
+        const csv = convertToCSV(eventData);
+        const downloadLink = document.getElementById("download_link");
+        const message = document.getElementById("message");
+
+        // data URI
+        downloadLink.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        downloadLink.style.display = "block";
+        message.style.display = "block";
+        debugMessage("CSV generated successfully. Download link is now visible.");
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
+
+    // Compute class dates from a week spec (e.g., "24-26,28") and a weekday number (Mon=0..Sun=6)
+    function calculateClassDates(weeksStr, weekdayNum, firstMonday, baseWeek) {
+      const dates = [];
+      const parts = String(weeksStr).split(',').map(s => s.trim()).filter(Boolean);
+
+      parts.forEach(part => {
+        if (part.includes('-')) {
+          let [a, b] = part.split('-').map(Number);
+          if (!isNaN(a) && !isNaN(b) && b >= a) {
+            for (let w = a; w <= b; w++) {
+              addOneWeek(w, weekdayNum, firstMonday, baseWeek, dates);
+            }
+          }
+        } else {
+          const w = Number(part);
+          if (!isNaN(w)) addOneWeek(w, weekdayNum, firstMonday, baseWeek, dates);
+        }
+      });
+
+      debugMessage("Calculated " + dates.length + " class date(s) for weeks: " + weeksStr);
+      return dates;
+    }
+
+    function addOneWeek(weekNum, weekdayNum, firstMonday, baseWeek, outDates) {
+      // Anchor weekNum to the detected baseWeek
+      const startOfWeek = new Date(firstMonday.getTime() + (weekNum - baseWeek) * 7 * 24 * 60 * 60 * 1000);
+
+      // JS: Sunday=0..Saturday=6 → convert to Monday=0..Sunday=6
+      const startWeekday = (startOfWeek.getDay() + 6) % 7;
+      const daysDiff = (weekdayNum - startWeekday + 7) % 7;
+
+      const classDate = new Date(startOfWeek.getTime() + daysDiff * 24 * 60 * 60 * 1000);
+      outDates.push(classDate);
     }
   </script>
-  <!-- Embed YouTube video at the end of the page -->
+
   <iframe width="560" height="315" src="https://www.youtube.com/embed/XltwQzzLIP8?si=qnVgiCFBjO69FlLt" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 </body>
 </html>
+
